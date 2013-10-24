@@ -13,7 +13,9 @@ var cluster = require("cluster")
 , net = require('net')
 , fs = require('fs')
 , util = require('util')
-, minRestartAge = 2000
+, minRestartAge = 10000
+, maxUnstableRestarts = 10
+, unstableRestarts = 0
 , listeningWorkers = true
 , danger = false
 , logger;
@@ -76,6 +78,9 @@ function clusterMaster (config) {
   if (config.listeningWorkers !== undefined) {
     listeningWorkers = config.listeningWorkers;
   }
+
+  if (config.maxUnstableRestarts) maxUnstableRestarts = config.maxUnstableRestarts;
+
   env = config.env
 
   var masterConf = { exec: path.resolve(config.exec) }
@@ -286,12 +291,19 @@ function forkListener () {
 
       if (!worker.suicide) {
         debug("Worker %j exited abnormally", id)
+        if (unstableRestarts === maxUnstableRestarts) {
+          debug("too many unstable restarts. Stopped.")
+          process.exit(1);
+          return;
+        }
         // don't respawn right away if it's a very fast failure.
         // otherwise server crashes are hard to detect from monitors.
         if (worker.age < minRestartAge) {
+          unstableRestarts++;
           debug("Worker %j died too quickly, danger", id)
           danger = true
           // still try again in a few seconds, though.
+          resizing = false
           setTimeout(resize, 2000)
           return
         }
