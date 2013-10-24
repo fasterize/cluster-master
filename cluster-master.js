@@ -28,7 +28,7 @@ exports.quit = quit
 var debugStreams = {}
 function debug () {
   if (logger) {
-    logger.info.apply(logger, arguments);
+    logger.debug.apply(logger, arguments);
   } else {
     console.error.apply(console, arguments)
   }
