@@ -14,6 +14,7 @@ var cluster = require("cluster")
 , fs = require('fs')
 , util = require('util')
 , minRestartAge = 2000
+, listeningWorkers = true
 , danger = false
 , logger;
 
@@ -72,6 +73,9 @@ function clusterMaster (config) {
 
   minRestartAge = config.minRestartAge || minRestartAge
 
+  if (config.listeningWorkers !== undefined) {
+    listeningWorkers = config.listeningWorkers;
+  }
   env = config.env
 
   var masterConf = { exec: path.resolve(config.exec) }
@@ -365,7 +369,7 @@ function restart (cb) {
 
     // start a new one. if it lives for 2 seconds, kill the worker.
     if (first) {
-      cluster.once('listening', function (newbie) {
+      function skepticRestart(newbie) {
         var timer = setTimeout(function () {
           newbie.removeListener('exit', skeptic)
           if (worker && worker.process.connected) {
@@ -379,13 +383,27 @@ function restart (cb) {
           restarting = false
           clearTimeout(timer)
         }
-      })
+      }
+
+      if (listeningWorkers){
+        cluster.once('listening', skepticRestart);
+      }
+      else {
+        cluster.once('fork', skepticRestart);
+      }
     } else {
-      cluster.once('listening', function (newbie) {
+      function classicRestart(newbie) {
         if (worker && worker.process.connected) {
           worker.disconnect()
         }
-      })
+      }
+
+      if (listeningWorkers){
+        cluster.once('listening', classicRestart);
+      }
+      else {
+        cluster.once('fork', classicRestart);
+      }
       graceful()
     }
 
@@ -460,7 +478,13 @@ function resize (n, cb_) {
   // make us have the right number of them.
   if (req > 0) while (req -- > 0) {
     debug('resizing up', req)
-    cluster.once('listening', then())
+    if (listeningWorkers) {
+      cluster.once('listening', then())
+    }
+    else {
+      cluster.once('fork', then())
+    }
+
     cluster.fork(env)
   } else for (var i = clusterSize; i < c; i ++) {
     var worker = cluster.workers[current[i]]
