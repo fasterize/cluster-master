@@ -357,6 +357,7 @@ function resize (n, cb_) {
   if (resizing)
     return
 
+  resizing = true;
   function cb() {
     console.error('done resizing')
 
