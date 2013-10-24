@@ -14,6 +14,7 @@ var cluster = require("cluster")
 , util = require('util')
 , minRestartAge = 2000
 , danger = false
+, logger;
 
 exports = module.exports = clusterMaster
 exports.restart = restart
@@ -23,7 +24,11 @@ exports.quit = quit
 
 var debugStreams = {}
 function debug () {
-  console.error.apply(console, arguments)
+  if (logger) {
+    logger.info.apply(logger, arguments);
+  } else {
+    console.error.apply(console, arguments)
+  }
 
   var msg = util.format.apply(util, arguments)
   Object.keys(debugStreams).forEach(function (s) {
@@ -40,6 +45,8 @@ function debug () {
 
 function clusterMaster (config) {
   if (typeof config === "string") config = { exec: config }
+
+  if (config.logger) logger = config.logger;
 
   if (!config.exec) {
     throw new Error("Must define a 'exec' script")
@@ -111,7 +118,7 @@ function setupRepl () {
   }
 
   function startRepl () {
-    console.error('starting repl on '+socket+'=')
+    debug('starting repl on '+socket+'=')
     process.on('exit', function() {
       try { fs.unlinkSync(socket) } catch (er) {}
     })
@@ -354,12 +361,14 @@ function resize (n, cb_) {
   if (cb_)
     resizeCbs.push(cb_)
 
-  if (resizing)
+  if (resizing) {
+    debug("Already resizing.  Cannot resize yet.");
     return
+  }
 
   resizing = true;
   function cb() {
-    console.error('done resizing')
+    debug('done resizing')
 
     resizing = false
     var q = resizeCbs.slice(0)
