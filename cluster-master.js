@@ -14,7 +14,7 @@ var cluster = require("cluster")
 , fs = require('fs')
 , util = require('util')
 , minRestartAge = 10000
-, maxUnstableRestarts = 10
+, maxUnstableRestarts = 5
 , unstableRestarts = 0
 , listeningWorkers = true
 , danger = false
@@ -80,6 +80,8 @@ function clusterMaster (config) {
   }
 
   if (config.maxUnstableRestarts) maxUnstableRestarts = config.maxUnstableRestarts;
+
+  maxUnstableRestarts = maxUnstableRestarts * clusterSize;
 
   env = config.env
 
@@ -273,6 +275,24 @@ Worker.prototype.kill = function () {
   process.kill(this.pid)
 }
 
+function endOfUnstableRestarts() {
+  if (Object.keys(cluster.workers).length === clusterSize && !resizing) {
+    var stillUnstable = false;
+    for (var id in cluster.workers) {
+      if (cluster.workers[id].age < 20000) {
+        stillUnstable = true;
+      }
+    }
+
+    if (!stillUnstable) {
+      debug("end of the unstable restarts");
+      unstableRestarts = 0;
+    }
+    else {
+      setTimeout(endOfUnstableRestarts, 10000);
+    }
+  }
+}
 
 function forkListener () {
   cluster.on("fork", function (worker) {
@@ -300,6 +320,7 @@ function forkListener () {
         // otherwise server crashes are hard to detect from monitors.
         if (worker.age < minRestartAge) {
           unstableRestarts++;
+          setTimeout(endOfUnstableRestarts, 60000);
           debug("Worker %j died too quickly, danger", id)
           danger = true
           // still try again in a few seconds, though.
