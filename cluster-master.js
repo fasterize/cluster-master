@@ -1,8 +1,10 @@
 // Set up a cluster and set up resizing and such.
 
 var cluster = require("cluster")
+, _ = require("underscore")
 , quitting = false
 , restarting = false
+, tooQuick = false
 , path = require("path")
 , clusterSize = 0
 , env
@@ -18,10 +20,14 @@ var cluster = require("cluster")
 , unstableRestarts = 0
 , listeningWorkers = true
 , danger = false
+, handleWorkerCondemnedToBeDeadInterval
+, tooQuickTimeOut = 30000
 , logger;
 
 exports = module.exports = clusterMaster
 exports.restart = restart
+exports.disconnectWorker = disconnectWorker
+exports.handleWorkerCondemnedToBeDead = handleWorkerCondemnedToBeDead
 exports.resize = resize
 exports.quitHard = quitHard
 exports.quit = quit
@@ -46,11 +52,22 @@ function debug () {
   })
 }
 
+function disconnectWorker(worker) {
+  worker.willBeDead = true;
+  if (worker.suicide) {
+    worker.process.disconnect();
+  } else {
+    worker.disconnect();
+  }
+}
 
 function clusterMaster (config) {
   if (typeof config === "string") config = { exec: config }
 
   if (config.logger) logger = config.logger;
+
+  // set interval to 30s
+  handleWorkerCondemnedToBeDeadInterval = config.cleanWorkersInterval || 30000
 
   if (!config.exec) {
     throw new Error("Must define a 'exec' script")
@@ -348,20 +365,56 @@ function forkListener () {
   })
 }
 
+function handleWorkerCondemnedToBeDead(workers) {
+  if (!restarting) {
+    debug("handler of worker condemned to be dead is started")
+    Object.keys(workers).forEach( function(key) {
+      if (workers[key].willBeDead == true) {
+        debug("force disconnect worker id:", key)
+        workers[key].process.disconnect()
+      }
+      // delaye the force disconnect for next time for suicide case
+      if (workers[key].suicide == true) {
+        debug("set willBeDead in worker id:", key)
+        workers[key].willBeDead = true
+      }
+    });
+  }
+}
+
+setInterval(function() {
+  handleWorkerCondemnedToBeDead(cluster.workers)
+}, handleWorkerCondemnedToBeDeadInterval);
+
+
 function restart (cb) {
-  if (restarting) {
-    debug("Already restarting.  Cannot restart yet.")
+
+  if (restarting || tooQuick) {
+    debug("Already restarting or too quick restart.  Cannot restart yet.")
     return
   }
 
+  // cleanUp before restarting
+  handleWorkerCondemnedToBeDead(cluster.workers)
+
   restarting = true
+  // prevent too quick reload (30s)
+  tooQuick = true
+  setTimeout(function() {
+    tooQuick = false
+  }, tooQuickTimeOut)
 
   // graceful restart.
   // all the existing workers get killed, and this
   // causes new ones to be spawned.  If there aren't
   // already the intended number, then fork new extras.
-  var current = Object.keys(cluster.workers)
-  , length = current.length
+  // Apply restart only on worker that are not tagged with willBeDead
+  // this will prevent the growth in size when restart is fired
+  var current = _.filter(Object.keys(cluster.workers), function(workerId){
+    return !(cluster.workers[workerId].willBeDead)
+  });
+
+  var length = current.length
   , reqs = clusterSize - length
 
   var i = 0
@@ -395,7 +448,7 @@ function restart (cb) {
 
     if (quitting) {
       if (worker && worker.process.connected) {
-        worker.disconnect()
+        disconnectWorker(worker)
       }
       return graceful()
     }
@@ -406,7 +459,7 @@ function restart (cb) {
         var timer = setTimeout(function () {
           newbie.removeListener('exit', skeptic)
           if (worker && worker.process.connected) {
-            worker.disconnect()
+            disconnectWorker(worker)
           }
           graceful()
         }, 2000)
@@ -427,7 +480,7 @@ function restart (cb) {
     } else {
       function classicRestart(newbie) {
         if (worker && worker.process.connected) {
-          worker.disconnect()
+          disconnectWorker(worker)
         }
       }
 
@@ -524,7 +577,7 @@ function resize (n, cb_) {
     debug('resizing down', current[i])
     worker.once('exit', then())
     if (worker && worker.process.connected) {
-      worker.disconnect()
+      disconnectWorker(worker)
     }
   }
 }
