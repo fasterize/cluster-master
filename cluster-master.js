@@ -119,6 +119,11 @@ function clusterMaster (config) {
   // now make it the right size
   debug((replAddressPath) ? 'resize and then setup repl' : 'resize')
   resize(setupRepl)
+
+  // start worker killer handler
+  setInterval(function() {
+    handleWorkerCondemnedToBeDead(cluster.workers)
+  }, handleWorkerCondemnedToBeDeadInterval);
 }
 
 function select (field) {
@@ -381,11 +386,6 @@ function handleWorkerCondemnedToBeDead(workers) {
     });
   }
 }
-
-setInterval(function() {
-  handleWorkerCondemnedToBeDead(cluster.workers)
-}, handleWorkerCondemnedToBeDeadInterval);
-
 
 function restart (cb) {
 
