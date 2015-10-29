@@ -20,14 +20,15 @@ var cluster = require("cluster")
 , unstableRestarts = 0
 , listeningWorkers = true
 , danger = false
-, handleWorkerCondemnedToBeDeadInterval
+, cleanCondemnedWorkersInterval = 60000
 , tooQuickTimeOut = 30000
+, forcefullyKillTimeOut = 5000
 , logger;
 
 exports = module.exports = clusterMaster
 exports.restart = restart
 exports.disconnectWorker = disconnectWorker
-exports.handleWorkerCondemnedToBeDead = handleWorkerCondemnedToBeDead
+exports.handleCleaningOfCondemnedWorkers = handleCleaningOfCondemnedWorkers;
 exports.resize = resize
 exports.quitHard = quitHard
 exports.quit = quit
@@ -52,22 +53,15 @@ function debug () {
   })
 }
 
-function disconnectWorker(worker) {
-  worker.willBeDead = true;
-  if (worker.suicide) {
-    worker.process.disconnect();
-  } else {
-    worker.disconnect();
-  }
-}
-
 function clusterMaster (config) {
   if (typeof config === "string") config = { exec: config }
 
   if (config.logger) logger = config.logger;
 
-  // set interval to 30s
-  handleWorkerCondemnedToBeDeadInterval = config.cleanWorkersInterval || 30000
+  if (config.cleanComdemnedWorkersInterval) {
+    // zero is not allowed.
+    cleanCondemnedWorkersInterval = config.cleanComdemnedWorkersInterval;
+  }
 
   if (!config.exec) {
     throw new Error("Must define a 'exec' script")
@@ -122,8 +116,8 @@ function clusterMaster (config) {
 
   // start worker killer handler
   setInterval(function() {
-    handleWorkerCondemnedToBeDead(cluster.workers)
-  }, handleWorkerCondemnedToBeDeadInterval);
+    handleCleaningOfCondemnedWorkers(cluster.workers);
+  }, cleanCondemnedWorkersInterval);
 }
 
 function select (field) {
@@ -365,26 +359,55 @@ function forkListener () {
       disconnectTimer = setTimeout(function () {
         debug("Worker %j, forcefully killing", id)
         worker.process.kill("SIGKILL")
-      }, 5000)
+      }, forcefullyKillTimeOut)
     })
   })
 }
 
-function handleWorkerCondemnedToBeDead(workers) {
-  if (!restarting) {
-    debug("handler of worker condemned to be dead is started")
-    Object.keys(workers).forEach( function(key) {
-      if (workers[key].willBeDead == true) {
-        debug("force disconnect worker id:", key)
-        workers[key].process.disconnect()
-      }
-      // delaye the force disconnect for next time for suicide case
-      if (workers[key].suicide == true) {
-        debug("set willBeDead in worker id:", key)
-        workers[key].willBeDead = true
-      }
-    });
+function shouldWorkerBeCondemned(worker) {
+  return worker.suicide || !worker.process.connected;
+}
+
+function condemnedWorker(worker) {
+  if (!worker.condemnationDate) {
+    debug("Worker %j, condemned to death", worker.id);
+    worker.condemnationDate = Date.now();
   }
+}
+
+function shouldWorkerBeKill(worker) {
+  return worker.condemnationDate
+    && Date.now() - worker.condemnationDate > forcefullyKillTimeOut;
+}
+
+function killWorker(worker) {
+  debug("Worker %j, roughly killing", worker.id);
+  process.kill(worker.process.pid, "SIGKILL");
+}
+
+function disconnectWorker(worker) {
+  condemnedWorker(worker);
+  if (!worker.suicide) {
+    debug("Worker %j, disconnecting", worker.id);
+    worker.disconnect();
+  }
+}
+
+function handleCleaningOfCondemnedWorkers(workers) {
+  if (restarting) {
+    return;
+  }
+
+  Object.keys(workers).forEach(function(id) {
+    var worker = workers[id];
+
+    if (shouldWorkerBeKill(worker)) {
+      killWorker(worker);
+    } else if (shouldWorkerBeCondemned(worker)) {
+      // It will be roughly kill the next time this method is call.
+      condemnedWorker(worker);
+    }
+  });
 }
 
 function restart (cb) {
@@ -395,7 +418,7 @@ function restart (cb) {
   }
 
   // cleanUp before restarting
-  handleWorkerCondemnedToBeDead(cluster.workers)
+  handleCleaningOfCondemnedWorkers(cluster.workers);
 
   restarting = true
   // prevent too quick reload (30s)

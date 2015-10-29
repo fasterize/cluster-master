@@ -1,82 +1,132 @@
-var clusterMaster = require('../cluster-master.js'),
+var clusterMaster = require('../cluster-master'),
     sinon = require('sinon'),
-    assert = require('assert');
+    should = require('should');
 
 describe('ClusterMaster', function() {
 
-  describe('Worker actions', function() {
+  describe('#disconnectWorker', function() {
     var worker;
-    beforeEach(function(){
+
+    beforeEach(function() {
       worker = {
-        process:  {disconnect: sinon.spy()},
-        disconnect: sinon.spy()
-      }
+        suicide: undefined,
+        disconnect: sinon.spy(),
+        process: { connected: true }
+      };
     });
 
-    it("should disconnect worker when suicide not defined", function(){
+    it('should condemned and disconnect worker if suicide is false', function() {
       clusterMaster.disconnectWorker(worker);
 
-      assert(worker.disconnect.calledOnce)
-      assert(!worker.process.disconnect.calledOnce)
-      assert(worker.willBeDead)
+      should.exist(worker.condemnationDate);
+      worker.disconnect.calledOnce.should.be.true;
     });
 
-    it("should disconnect worker when suicide is true", function(){
+    it('should condemned but not disconnect worker if suicide is true', function(){
       worker.suicide = true;
       clusterMaster.disconnectWorker(worker);
 
-      assert(worker.process.disconnect.calledOnce)
-      assert(!worker.disconnect.calledOnce)
-      assert(worker.willBeDead)
+      should.exist(worker.condemnationDate);
+      worker.disconnect.called.should.be.false;
+    });
+
+    it('should not condemned worker multiple times', function() {
+      clusterMaster.disconnectWorker(worker);
+      var expectedDate = worker.condemnationDate;
+      clusterMaster.disconnectWorker(worker);
+
+      worker.condemnationDate.should.be.equal(expectedDate);
     });
   });
 
-  describe('handleWorkerCondemnedToBeDead', function() {
+  describe('#handleCleaningOfCondemnedWorkers', function() {
     var workers;
-    beforeEach(function(){
+
+    beforeEach(function() {
+      sinon.stub(process, 'kill');
+
       workers = {
         '1': {
-          process: { disconnect: sinon.spy() },
-          disconnect: sinon.spy()
+          suicide: undefined,
+          disconnect: sinon.spy(),
+          process: { connected: true, pid: 1 }
         },
         '2': {
-          process: { disconnect: sinon.spy() },
-          disconnect: sinon.spy()
+          suicide: undefined,
+          disconnect: sinon.spy(),
+          process: { connected: true, pid: 2 }
         },
         '3': {
-          process: { disconnect: sinon.spy() },
-          disconnect: sinon.spy()
+          suicide: undefined,
+          disconnect: sinon.spy(),
+          process: { connected: true, pid: 3 }
         }
-      }
+      };
     });
 
-    it("should disconnect worker tagged with the flag willBeDead", function(){
-      workers['1'].willBeDead = true;
-      clusterMaster.handleWorkerCondemnedToBeDead(workers);
-
-      assert(workers['1'].process.disconnect.calledOnce)
-      assert(!workers['2'].process.disconnect.calledOnce)
-      assert(!workers['3'].process.disconnect.calledOnce)
-
-      assert(!workers['1'].disconnect.calledOnce)
-      assert(!workers['2'].disconnect.calledOnce)
-      assert(!workers['3'].disconnect.calledOnce)
+    afterEach(function() {
+      process.kill.restore();
     });
 
-    it("should tag suicide worker with willBeDead", function(){
-      workers['1'].suicide = true;
-      clusterMaster.handleWorkerCondemnedToBeDead(workers);
+    it("should kill condemned worker if forcefullyKillTimeOut is elapsed", function(){
+      var worker = workers['2'],
+          forcefullyKillTimeOut = 5000;
 
-      assert(workers['1'].willBeDead)
+      worker.condemnationDate = Date.now() - forcefullyKillTimeOut;
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
 
-      assert(!workers['1'].process.disconnect.calledOnce)
-      assert(!workers['2'].process.disconnect.calledOnce)
-      assert(!workers['3'].process.disconnect.calledOnce)
-
-      assert(!workers['1'].disconnect.calledOnce)
-      assert(!workers['2'].disconnect.calledOnce)
-      assert(!workers['3'].disconnect.calledOnce)
+      process.kill.calledOnce.should.be.true;
+      process.kill.calledWith(worker.process.pid).should.be.true;
     });
 
+    it("should not kill condemned worker if forcefullyKillTimeOut is not elapsed", function(){
+      var worker = workers['2'];
+
+      worker.condemnationDate = Date.now();
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+
+      process.kill.called.should.be.false;
+    });
+
+    it("should condemned worker if suicide is true", function(){
+      var worker = workers['3'];
+
+      worker.suicide = true;
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+
+      should.exist(worker.condemnationDate);
+      should.not.exist(workers['1'].condemnationDate);
+      should.not.exist(workers['2'].condemnationDate);
+    });
+
+    it("should condemned worker if it is not connected", function(){
+      var worker = workers['3'];
+
+      worker.process.connected = false;
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+
+      should.exist(worker.condemnationDate);
+      should.not.exist(workers['1'].condemnationDate);
+      should.not.exist(workers['2'].condemnationDate);
+    });
+
+    it("should not condemned connected and non suicidal worker", function(){
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+
+      should.not.exist(workers['1'].condemnationDate);
+      should.not.exist(workers['2'].condemnationDate);
+      should.not.exist(workers['3'].condemnationDate);
+    });
+
+    it('should not condemned worker multiple times', function() {
+      var worker = workers['3'];
+
+      worker.process.connected = false;
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+      var expectedDate = worker.condemnationDate;
+      clusterMaster.handleCleaningOfCondemnedWorkers(workers);
+
+      worker.condemnationDate.should.be.equal(expectedDate);
+    });
   });
 });
