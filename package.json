@@ -9,17 +9,32 @@
   },
   "main": "cluster-master.js",
   "engines": {
-    "node": ">=0.7.7"
+    "node": ">=8.12.0"
   },
   "license": "ISC",
   "dependencies": {
     "underscore": "^1.8.3"
   },
   "devDependencies": {
+    "eslint": "^5.9.0",
+    "eslint-config-airbnb-base": "^13.1.0",
+    "eslint-config-prettier": "^3.3.0",
+    "eslint-formatter-gitlab": "^1.0.3",
+    "eslint-plugin-import": "^2.14.0",
+    "eslint-plugin-mocha": "^5.2.0",
+    "eslint-plugin-node": "^8.0.0",
+    "eslint-plugin-promise": "^4.0.1",
+    "lebab": "^3.1.0",
+    "mocha": "^5.2.0",
+    "mocha-jenkins-reporter": "^0.4.2",
+    "nyc": "^14.1.1",
+    "prettier": "^1.16.3",
     "should": "^7.1.1",
     "sinon": "^1.17.1"
   },
   "scripts": {
-    "test": "mocha ./test/*"
+    "test": "mocha ./test/*",
+    "coverage": "JUNIT_REPORT_PATH=./report/report.xml nyc --reporter text mocha --timeout 10000 --reporter mocha-jenkins-reporter",
+    "lint": "eslint ."
   }
 }
