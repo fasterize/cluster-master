@@ -1,76 +1,75 @@
-var clusterMaster = require('../cluster-master'),
-    sinon = require('sinon'),
-    should = require('should');
+const sinon = require('sinon');
+const should = require('should');
+const clusterMaster = require('../cluster-master');
 
-describe('ClusterMaster', function() {
+describe('ClusterMaster', () => {
+  describe('#disconnectWorker', () => {
+    let worker;
 
-  describe('#disconnectWorker', function() {
-    var worker;
-
-    beforeEach(function() {
+    beforeEach(() => {
       worker = {
-        suicide: undefined,
+        exitedAfterDisconnect: undefined,
         disconnect: sinon.spy(),
-        process: { connected: true }
+        process: { connected: true },
       };
     });
 
-    it('should condemned and disconnect worker if suicide is false', function() {
+    it('should condemned and disconnect worker if exitedAfterDisconnect is false', () => {
       clusterMaster.disconnectWorker(worker);
 
       should.exist(worker.condemnationDate);
       worker.disconnect.calledOnce.should.be.true;
     });
 
-    it('should condemned but not disconnect worker if suicide is true', function(){
-      worker.suicide = true;
+    it('should condemned but not disconnect worker if exitedAfterDisconnect is true', () => {
+      worker.exitedAfterDisconnect = true;
       clusterMaster.disconnectWorker(worker);
 
       should.exist(worker.condemnationDate);
       worker.disconnect.called.should.be.false;
     });
 
-    it('should not condemned worker multiple times', function() {
+    it('should not condemned worker multiple times', () => {
       clusterMaster.disconnectWorker(worker);
-      var expectedDate = worker.condemnationDate;
+      const expectedDate = worker.condemnationDate;
       clusterMaster.disconnectWorker(worker);
 
       worker.condemnationDate.should.be.equal(expectedDate);
     });
   });
 
-  describe('#handleCleaningOfCondemnedWorkers', function() {
-    var workers;
+  describe('#handleCleaningOfCondemnedWorkers', () => {
+    let workers;
 
-    beforeEach(function() {
+    beforeEach(() => {
       sinon.stub(process, 'kill');
 
       workers = {
         '1': {
-          suicide: undefined,
+          exitedAfterDisconnect: undefined,
           disconnect: sinon.spy(),
-          process: { connected: true, pid: 1 }
+          process: { connected: true, pid: 1 },
         },
         '2': {
-          suicide: undefined,
+          exitedAfterDisconnect: undefined,
           disconnect: sinon.spy(),
-          process: { connected: true, pid: 2 }
+          process: { connected: true, pid: 2 },
         },
         '3': {
-          suicide: undefined,
+          exitedAfterDisconnect: undefined,
           disconnect: sinon.spy(),
-          process: { connected: true, pid: 3 }
-        }
+          process: { connected: true, pid: 3 },
+        },
       };
     });
 
-    afterEach(function() {
+    afterEach(() => {
       process.kill.restore();
     });
 
-    it("should kill condemned worker if forcefullyKillTimeOut is elapsed", function(){
-      var worker = workers['2'],
-          forcefullyKillTimeOut = 5000;
+    it('should kill condemned worker if forcefullyKillTimeOut is elapsed', () => {
+      const worker = workers['2'];
+      const forcefullyKillTimeOut = 5000;
 
       worker.condemnationDate = Date.now() - forcefullyKillTimeOut;
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
@@ -79,8 +78,8 @@ describe('ClusterMaster', function() {
       process.kill.calledWith(worker.process.pid).should.be.true;
     });
 
-    it("should not kill condemned worker if forcefullyKillTimeOut is not elapsed", function(){
-      var worker = workers['2'];
+    it('should not kill condemned worker if forcefullyKillTimeOut is not elapsed', () => {
+      const worker = workers['2'];
 
       worker.condemnationDate = Date.now();
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
@@ -88,10 +87,10 @@ describe('ClusterMaster', function() {
       process.kill.called.should.be.false;
     });
 
-    it("should condemned worker if suicide is true", function(){
-      var worker = workers['3'];
+    it('should condemned worker if exitedAfterDisconnect is true', () => {
+      const worker = workers['3'];
 
-      worker.suicide = true;
+      worker.exitedAfterDisconnect = true;
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
 
       should.exist(worker.condemnationDate);
@@ -99,8 +98,8 @@ describe('ClusterMaster', function() {
       should.not.exist(workers['2'].condemnationDate);
     });
 
-    it("should condemned worker if it is not connected", function(){
-      var worker = workers['3'];
+    it('should condemned worker if it is not connected', () => {
+      const worker = workers['3'];
 
       worker.process.connected = false;
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
@@ -110,7 +109,7 @@ describe('ClusterMaster', function() {
       should.not.exist(workers['2'].condemnationDate);
     });
 
-    it("should not condemned connected and non suicidal worker", function(){
+    it('should not condemned connected and non suicidal worker', () => {
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
 
       should.not.exist(workers['1'].condemnationDate);
@@ -118,12 +117,12 @@ describe('ClusterMaster', function() {
       should.not.exist(workers['3'].condemnationDate);
     });
 
-    it('should not condemned worker multiple times', function() {
-      var worker = workers['3'];
+    it('should not condemned worker multiple times', () => {
+      const worker = workers['3'];
 
       worker.process.connected = false;
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
-      var expectedDate = worker.condemnationDate;
+      const expectedDate = worker.condemnationDate;
       clusterMaster.handleCleaningOfCondemnedWorkers(workers);
 
       worker.condemnationDate.should.be.equal(expectedDate);
