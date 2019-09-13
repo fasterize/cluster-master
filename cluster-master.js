@@ -42,7 +42,7 @@ exports.quit = quit;
 
 const debugStreams = {};
 
-let resizing = false;
+let startingWorkersCount = 0;
 const resizeCbs = [];
 
 function debug(...args) {
@@ -309,7 +309,7 @@ Worker.prototype.kill = function() {
 
 function endOfUnstableRestarts() {
   const workersIds = Object.keys(cluster.workers);
-  if (workersIds.length === clusterSize && !resizing) {
+  if (workersIds.length === clusterSize && startingWorkersCount === 0) {
     let stillUnstable = false;
     workersIds.forEach(id => {
       if (cluster.workers[id].age < 20000) {
@@ -329,6 +329,7 @@ function endOfUnstableRestarts() {
 function forkListener() {
   cluster.on('fork', worker => {
     worker.birth = Date.now();
+    worker.started = false;
     Object.defineProperty(worker, 'age', {
       get() {
         return Date.now() - this.birth;
@@ -345,6 +346,10 @@ function forkListener() {
     worker.on('exit', () => {
       clearTimeout(disconnectTimer);
 
+      if (!worker.started) {
+        startingWorkersCount = startingWorkersCount > 0 ? startingWorkersCount - 1 : 0;
+      }
+
       if (!worker.exitedAfterDisconnect) {
         debug('Worker %j exited abnormally', id);
         if (unstableRestarts === maxUnstableRestarts) {
@@ -359,7 +364,6 @@ function forkListener() {
           debug('Worker %j died too quickly, danger', id);
           danger = true;
           // still try again in a few seconds, though.
-          resizing = false;
           setTimeout(resize, 2000);
           return;
         }
@@ -367,7 +371,7 @@ function forkListener() {
         debug('Worker %j exited', id);
       }
 
-      if (Object.keys(cluster.workers).length < clusterSize && !resizing) {
+      if (Object.keys(cluster.workers).length < clusterSize) {
         resize();
       }
     });
@@ -473,6 +477,7 @@ function restart(cb) {
   // all the current workers, kill and then wait for a
   // new one to spawn before moving on.
   graceful();
+
   function graceful() {
     debug('graceful %d of %d', i, length);
     if (i >= current.length) {
@@ -493,19 +498,21 @@ function restart(cb) {
     }
 
     function skepticRestart(newbie) {
-      const timer = setTimeout(() => {
-        newbie.removeListener('exit', skeptic);
-        if (worker && worker.process.connected) {
-          disconnectWorker(worker);
+      return () => {
+        const timer = setTimeout(() => {
+          newbie.removeListener('exit', skeptic);
+          if (worker && worker.process.connected) {
+            disconnectWorker(worker);
+          }
+          graceful();
+        }, 2000);
+        newbie.on('exit', skeptic);
+        function skeptic() {
+          debug('New worker died quickly. Aborting restart.');
+          restarting = false;
+          clearTimeout(timer);
         }
-        graceful();
-      }, 2000);
-      newbie.on('exit', skeptic);
-      function skeptic() {
-        debug('New worker died quickly. Aborting restart.');
-        restarting = false;
-        clearTimeout(timer);
-      }
+      };
     }
 
     function classicRestart(_newbie) {
@@ -515,22 +522,23 @@ function restart(cb) {
     }
 
     // start a new one. if it lives for 2 seconds, kill the worker.
+    const newWorker = cluster.fork(env);
+    newWorker.started = true;
     if (first) {
       if (listeningWorkers) {
-        cluster.once('listening', skepticRestart);
+        newWorker.once('listening', skepticRestart(newWorker));
       } else {
-        cluster.once('fork', skepticRestart);
+        newWorker.once('fork', skepticRestart(newWorker));
       }
     } else {
       if (listeningWorkers) {
-        cluster.once('listening', classicRestart);
+        newWorker.once('listening', classicRestart);
       } else {
-        cluster.once('fork', classicRestart);
+        newWorker.once('fork', classicRestart);
       }
       graceful();
     }
 
-    cluster.fork(env);
     return undefined;
   }
 }
@@ -543,17 +551,9 @@ function resize(size, callback) {
 
   if (callback) resizeCbs.push(callback);
 
-  if (resizing) {
-    debug('Already resizing. Cannot resize yet.');
-    return;
-  }
-
-  resizing = true;
-
   function cb() {
     debug('done resizing');
 
-    resizing = false;
     const callbacks = resizeCbs.slice(0);
     resizeCbs.length = 0;
     callbacks.forEach(currentCallback => {
@@ -582,41 +582,43 @@ function resize(size, callback) {
   cluster.setMaxListeners(clusterSize * 2);
 
   if (nbWorkers === clusterSize) {
-    resizing = false;
     cb();
     return;
   }
 
-  let thenCnt = 0;
-  function then() {
-    thenCnt++;
-    return then2;
+  function then(worker, thenCb) {
+    startingWorkersCount++;
+    return then2(worker, thenCb);
   }
-  function then2() {
-    if (--thenCnt === 0) {
-      resizing = false;
-      return cb();
-    }
-    return undefined;
+  function then2(worker, then2Cb) {
+    return () => {
+      worker.started = true;
+      startingWorkersCount = startingWorkersCount > 0 ? startingWorkersCount - 1 : 0;
+      if (startingWorkersCount === 0) {
+        if (then2Cb) {
+          return then2Cb();
+        }
+      }
+      return undefined;
+    };
   }
 
   // make us have the right number of them.
   if (req > 0)
     while (req-- > 0) {
       debug('resizing up', req);
+      const newWorker = cluster.fork(env);
       if (listeningWorkers) {
-        cluster.once('listening', then());
+        newWorker.once('listening', then(newWorker, cb));
       } else {
-        cluster.once('fork', then());
+        newWorker.once('fork', then(newWorker, cb));
       }
-
-      cluster.fork(env);
     }
   else
     for (let i = clusterSize; i < nbWorkers; i++) {
       const worker = cluster.workers[current[i]];
       debug('resizing down', current[i]);
-      worker.once('exit', then());
+      worker.once('exit', then(worker, cb));
       if (worker && worker.process.connected) {
         disconnectWorker(worker);
       }
